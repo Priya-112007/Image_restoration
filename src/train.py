@@ -1,5 +1,6 @@
 import argparse
 import copy
+import math
 import os
 import time
 
@@ -15,6 +16,16 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+
+def make_warmup_cosine_scheduler(optimizer, epochs, warmup_epochs=5):
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / max(1, warmup_epochs)
+        progress = (epoch - warmup_epochs) / max(1, (epochs - warmup_epochs))
+        return 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 def compute_psnr(pred, gt):
     mse = torch.mean((pred - gt) ** 2)
@@ -48,6 +59,11 @@ def main():
     parser.add_argument("--patch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--val_every", type=int, default=5)
+    parser.add_argument("--warmup_epochs", type=int, default=5,
+                         help="Epochs to linearly ramp up the learning rate before cosine decay.")
+    parser.add_argument("--grad_clip", type=float, default=1.0,
+                         help="Max gradient norm. Prevents the kind of mid-training "
+                              "instability seen with attention-based blocks (Stage 2).")
     parser.add_argument("--no_resume", action="store_true",
                          help="Start fresh instead of resuming from a checkpoint.")
     parser.add_argument("--use_wandb", action="store_true")
@@ -80,7 +96,7 @@ def main():
         p.requires_grad_(False)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = make_warmup_cosine_scheduler(optimizer, args.epochs, args.warmup_epochs)
     scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
 
     last_ckpt_path = os.path.join(args.ckpt_dir, f"{args.stage}_last.pt")
@@ -122,6 +138,8 @@ def main():
                 loss, loss_parts = restoration_loss(pred, gt)
 
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
             scaler.step(optimizer)
             scaler.update()
 
@@ -131,19 +149,11 @@ def main():
 
             running_loss += loss.item()
 
+        current_lr = optimizer.param_groups[0]["lr"]  # LR actually used this epoch
         scheduler.step()
         avg_loss = running_loss / max(len(train_loader), 1)
         print(f"[{args.stage}] Epoch {epoch}: loss={avg_loss:.4f} "
-              f"({time.time() - epoch_start:.1f}s)")
-
-        torch.save({
-            "model": model.state_dict(),
-            "ema": ema_model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "epoch": epoch,
-            "best_val_ssim": best_val_ssim,
-        }, last_ckpt_path)
+              f"lr={current_lr:.2e} ({time.time() - epoch_start:.1f}s)")
 
         if epoch % args.val_every == 0 or epoch == args.epochs - 1:
             val_ssim, val_psnr = validate(ema_model, val_loader, device)
@@ -163,6 +173,14 @@ def main():
                     "val_psnr": val_psnr,
                 }, best_ckpt_path)
                 print(f"  -> new best checkpoint saved (SSIM={val_ssim:.4f})")
+        torch.save({
+            "model": model.state_dict(),
+            "ema": ema_model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "epoch": epoch,
+            "best_val_ssim": best_val_ssim,
+        }, last_ckpt_path)
 
     print(f"Training complete. Best val SSIM: {best_val_ssim:.4f}")
     print(f"Best checkpoint: {best_ckpt_path}")
