@@ -1,8 +1,10 @@
 import torch
 import torch.nn.functional as F
 
+
 def charbonnier_loss(pred, gt, eps=1e-6):
     return torch.mean(torch.sqrt((pred - gt) ** 2 + eps ** 2))
+
 
 def _gaussian_window(window_size=11, sigma=1.5, device="cpu", dtype=torch.float32):
     coords = torch.arange(window_size, dtype=dtype, device=device) - window_size // 2
@@ -11,10 +13,8 @@ def _gaussian_window(window_size=11, sigma=1.5, device="cpu", dtype=torch.float3
     window = g.outer(g).unsqueeze(0).unsqueeze(0)
     return window
 
+
 def ssim(pred, gt, window_size=11, data_range=1.0):
-    """Structural Similarity Index, computed directly on GPU tensors so it
-    can be used both as a loss term and as a validation metric, with no
-    numpy round-trip needed."""
     window = _gaussian_window(window_size, device=pred.device, dtype=pred.dtype)
     pad = window_size // 2
 
@@ -35,14 +35,17 @@ def ssim(pred, gt, window_size=11, data_range=1.0):
     )
     return ssim_map.mean()
 
+
 def psnr(pred, gt, data_range=1.0):
     mse = torch.mean((pred - gt) ** 2)
     if mse.item() == 0:
         return torch.tensor(100.0)
     return 10 * torch.log10((data_range ** 2) / mse)
 
+
 _SOBEL_X = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
 _SOBEL_Y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+
 
 def edge_loss(pred, gt):
     kx = _SOBEL_X.view(1, 1, 3, 3).to(device=pred.device, dtype=pred.dtype)
@@ -55,14 +58,54 @@ def edge_loss(pred, gt):
 
     return torch.mean(torch.abs(pred_gx - gt_gx) + torch.abs(pred_gy - gt_gy))
 
-def restoration_loss(pred, gt, w_ssim=0.2, w_edge=0.1):
+_LPIPS_MODEL = None
+_LPIPS_WARNED = False
+
+
+def _get_lpips_model(device):
+    global _LPIPS_MODEL, _LPIPS_WARNED
+    if _LPIPS_MODEL is None:
+        try:
+            import lpips
+        except ImportError:
+            if not _LPIPS_WARNED:
+                print("WARNING: 'lpips' package not installed — LPIPS loss term "
+                      "will be skipped (contributes 0). Run: pip install lpips")
+                _LPIPS_WARNED = True
+            return None
+        model = lpips.LPIPS(net="alex")
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad_(False)  # freeze LPIPS's own weights — we only
+                                      # want gradients to flow back to `pred`
+        _LPIPS_MODEL = model
+    return _LPIPS_MODEL.to(device)
+
+
+def lpips_loss(pred, gt):
+    model = _get_lpips_model(pred.device)
+    if model is None:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+
+    pred_f32 = pred.float()
+    gt_f32 = gt.float()
+    pred_3ch = pred_f32.repeat(1, 3, 1, 1) * 2 - 1
+    gt_3ch = gt_f32.repeat(1, 3, 1, 1) * 2 - 1
+
+    with torch.autocast(device_type=pred.device.type, enabled=False):
+        return model(pred_3ch, gt_3ch).mean()
+
+
+def restoration_loss(pred, gt, w_ssim=0.2, w_edge=0.1, w_lpips=0.15):
     l_charb = charbonnier_loss(pred, gt)
     l_ssim = 1 - ssim(pred, gt)
     l_edge = edge_loss(pred, gt)
-    total = l_charb + w_ssim * l_ssim + w_edge * l_edge
+    l_lpips = lpips_loss(pred, gt)
+    total = l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips
     parts = {
         "charbonnier": l_charb.item(),
         "ssim_loss": l_ssim.item(),
         "edge_loss": l_edge.item(),
+        "lpips_loss": l_lpips.item(),
     }
     return total, parts

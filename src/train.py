@@ -27,11 +27,13 @@ def make_warmup_cosine_scheduler(optimizer, epochs, warmup_epochs=5):
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+
 def compute_psnr(pred, gt):
     mse = torch.mean((pred - gt) ** 2)
     if mse.item() == 0:
         return 100.0
     return (10 * torch.log10(1.0 / mse)).item()
+
 
 def validate(model, val_loader, device):
     model.eval()
@@ -45,6 +47,7 @@ def validate(model, val_loader, device):
             n += 1
     model.train()
     return total_ssim / max(n, 1), total_psnr / max(n, 1)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -88,6 +91,8 @@ def main():
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2,
     )
+    # batch_size=1 for validation: full images can be different sizes
+    # (256 vs 512) across the dataset, which can't be batched together.
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=2)
 
     model = build_model(args.stage).to(device)
@@ -184,6 +189,7 @@ def main():
 
     print(f"Training complete. Best val SSIM: {best_val_ssim:.4f}")
     print(f"Best checkpoint: {best_ckpt_path}")
+
 
 if __name__ == "__main__":
     main()
