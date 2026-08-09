@@ -58,6 +58,14 @@ def edge_loss(pred, gt):
 
     return torch.mean(torch.abs(pred_gx - gt_gx) + torch.abs(pred_gy - gt_gy))
 
+
+def frequency_loss(pred, gt):
+    pred_fft = torch.fft.rfft2(pred.float(), norm="ortho")
+    gt_fft = torch.fft.rfft2(gt.float(), norm="ortho")
+    pred_mag = torch.abs(pred_fft)
+    gt_mag = torch.abs(gt_fft)
+    return torch.mean(torch.abs(pred_mag - gt_mag))
+
 _LPIPS_MODEL = None
 _LPIPS_WARNED = False
 
@@ -96,16 +104,18 @@ def lpips_loss(pred, gt):
         return model(pred_3ch, gt_3ch).mean()
 
 
-def restoration_loss(pred, gt, w_ssim=0.2, w_edge=0.1, w_lpips=0.15):
+def restoration_loss(pred, gt, w_ssim=0.2, w_edge=0.1, w_lpips=0.15, w_freq=0.0):
     l_charb = charbonnier_loss(pred, gt)
     l_ssim = 1 - ssim(pred, gt)
     l_edge = edge_loss(pred, gt)
     l_lpips = lpips_loss(pred, gt)
-    total = l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips
+    l_freq = frequency_loss(pred, gt) if w_freq > 0 else torch.zeros((), device=pred.device)
+    total = l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips + w_freq * l_freq
     parts = {
         "charbonnier": l_charb.item(),
         "ssim_loss": l_ssim.item(),
         "edge_loss": l_edge.item(),
         "lpips_loss": l_lpips.item(),
+        "freq_loss": l_freq.item(),
     }
     return total, parts

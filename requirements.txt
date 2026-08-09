@@ -3,3 +3,5 @@ numpy
 tqdm
 wandb
 lpips
+matplotlib
+scipy

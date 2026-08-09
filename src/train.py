@@ -57,26 +57,26 @@ def main():
     parser.add_argument("--deg_dir", required=True)
     parser.add_argument("--ckpt_dir", required=True)
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=8,
-                         help="Default 8 is a safe size for a free-tier T4 GPU.")
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--patch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--val_every", type=int, default=5)
-    parser.add_argument("--warmup_epochs", type=int, default=5,
-                         help="Epochs to linearly ramp up the learning rate before cosine decay.")
-    parser.add_argument("--grad_clip", type=float, default=1.0,
-                         help="Max gradient norm. Prevents the kind of mid-training "
-                              "instability seen with attention-based blocks (Stage 2).")
-    parser.add_argument("--no_resume", action="store_true",
-                         help="Start fresh instead of resuming from a checkpoint.")
+    parser.add_argument("--warmup_epochs", type=int, default=5)
+    parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--no_resume", action="store_true")
     parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--use_synthetic_degradation", action="store_true")
+    parser.add_argument("--synthetic_prob", type=float, default=0.3)
+    parser.add_argument("--use_cutmix", action="store_true")
+    parser.add_argument("--cutmix_prob", type=float, default=0.3)
+    parser.add_argument("--use_gamma_jitter", action="store_true")
+    parser.add_argument("--w_freq", type=float, default=0.0)
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     if device == "cpu":
-        print("WARNING: no GPU detected. In Colab: Runtime -> Change runtime "
-              "type -> select a GPU. Training on CPU will be extremely slow.")
+        print("WARNING: no GPU detected. Training on CPU will be extremely slow.")
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
 
@@ -84,15 +84,21 @@ def main():
     train_pairs, val_pairs = split_pairs(pairs, val_fraction=0.1, seed=42)
     print(f"Train pairs: {len(train_pairs)}  |  Val pairs: {len(val_pairs)}")
 
-    train_ds = RestorationDataset(train_pairs, patch_size=args.patch_size, train=True)
+    train_ds = RestorationDataset(
+        train_pairs, patch_size=args.patch_size, train=True,
+        use_synthetic_degradation=args.use_synthetic_degradation,
+        synthetic_prob=args.synthetic_prob,
+        use_cutmix=args.use_cutmix,
+        cutmix_prob=args.cutmix_prob,
+        use_gamma_jitter=args.use_gamma_jitter,
+    )
     val_ds = RestorationDataset(val_pairs, patch_size=args.patch_size, train=False)
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2,
     )
-    # batch_size=1 for validation: full images can be different sizes
-    # (256 vs 512) across the dataset, which can't be batched together.
+
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=2)
 
     model = build_model(args.stage).to(device)
@@ -140,7 +146,7 @@ def main():
             with torch.autocast(device_type="cuda", dtype=torch.float16,
                                  enabled=(device == "cuda")):
                 pred = model(deg)
-                loss, loss_parts = restoration_loss(pred, gt)
+                loss, loss_parts = restoration_loss(pred, gt, w_freq=args.w_freq)
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -154,7 +160,7 @@ def main():
 
             running_loss += loss.item()
 
-        current_lr = optimizer.param_groups[0]["lr"]  # LR actually used this epoch
+        current_lr = optimizer.param_groups[0]["lr"]  
         scheduler.step()
         avg_loss = running_loss / max(len(train_loader), 1)
         print(f"[{args.stage}] Epoch {epoch}: loss={avg_loss:.4f} "
