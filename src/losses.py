@@ -66,6 +66,18 @@ def frequency_loss(pred, gt):
     gt_mag = torch.abs(gt_fft)
     return torch.mean(torch.abs(pred_mag - gt_mag))
 
+def discriminator_loss(disc, real, fake):
+    real_pred = disc(real)
+    fake_pred = disc(fake.detach())
+    loss_real = torch.mean((real_pred - 1) ** 2)
+    loss_fake = torch.mean(fake_pred ** 2)
+    return 0.5 * (loss_real + loss_fake)
+
+
+def generator_adversarial_loss(disc, fake):
+    fake_pred = disc(fake)
+    return torch.mean((fake_pred - 1) ** 2)
+
 _LPIPS_MODEL = None
 _LPIPS_WARNED = False
 
@@ -84,8 +96,7 @@ def _get_lpips_model(device):
         model = lpips.LPIPS(net="alex")
         model.eval()
         for p in model.parameters():
-            p.requires_grad_(False)  # freeze LPIPS's own weights — we only
-                                      # want gradients to flow back to `pred`
+            p.requires_grad_(False)  
         _LPIPS_MODEL = model
     return _LPIPS_MODEL.to(device)
 

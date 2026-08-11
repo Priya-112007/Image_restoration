@@ -7,6 +7,7 @@ class SimpleGate(nn.Module):
         x1, x2 = x.chunk(2, dim=1)
         return x1 * x2
 
+
 class FiLM(nn.Module):
     def __init__(self, embed_dim, num_features):
         super().__init__()
@@ -17,6 +18,7 @@ class FiLM(nn.Module):
         scale = scale.unsqueeze(-1).unsqueeze(-1)
         shift = shift.unsqueeze(-1).unsqueeze(-1)
         return x * (1 + scale) + shift
+
 
 class DegradationEstimator(nn.Module):
     def __init__(self, embed_dim=32):
@@ -31,6 +33,7 @@ class DegradationEstimator(nn.Module):
     def forward(self, x):
         feat = self.net(x).flatten(1)
         return self.fc(feat)
+
 
 class NAFBlock(nn.Module):
     def __init__(self, c, embed_dim=None):
@@ -89,6 +92,7 @@ class MDTA(nn.Module):
 
 
 class GDFN(nn.Module):
+    """Gated-Dconv Feed-Forward Network (Restormer-style FFN)."""
     def __init__(self, c, expansion=2.66):
         super().__init__()
         hidden = int(c * expansion)
@@ -100,6 +104,7 @@ class GDFN(nn.Module):
         x = self.dwconv(self.proj_in(x))
         x1, x2 = x.chunk(2, dim=1)
         return self.proj_out(F.gelu(x1) * x2)
+
 
 class RestormerBlock(nn.Module):
     def __init__(self, c, embed_dim=None, num_heads=4):
@@ -117,6 +122,7 @@ class RestormerBlock(nn.Module):
         x = x + y
         x = x + self.ffn(self.norm2(x))
         return x
+
 
 class RestoreNet(nn.Module):
     def __init__(self, c=48, n_blocks=8, scale=2):
@@ -139,6 +145,9 @@ class RestoreNet(nn.Module):
         return torch.clamp(out + skip, 0, 1)
 
 class RestoreNetFiLM(nn.Module):
+    """Stage 1: adds a small degradation estimator whose output conditions
+    EVERY block in the network via FiLM, so the signal doesn't fade out
+    before reaching the later layers."""
     def __init__(self, c=48, n_blocks=8, scale=2, embed_dim=32):
         super().__init__()
         self.estimator = DegradationEstimator(embed_dim=embed_dim)
@@ -161,6 +170,7 @@ class RestoreNetFiLM(nn.Module):
             feat = block(feat, embed)
         out = self.up(feat)
         return torch.clamp(out + skip, 0, 1)
+
 
 class RestoreNetHybrid(nn.Module):
     def __init__(self, c=48, n_encoder_blocks=4, n_decoder_blocks=4,
@@ -192,6 +202,28 @@ class RestoreNetHybrid(nn.Module):
             feat = block(feat, embed)
         out = self.up(feat)
         return torch.clamp(out + skip, 0, 1)
+
+class PatchDiscriminator(nn.Module):
+    def __init__(self, c=32):
+        super().__init__()
+
+        def block(in_c, out_c, stride=2, norm=True):
+            layers = [nn.Conv2d(in_c, out_c, 4, stride=stride, padding=1)]
+            if norm:
+                layers.append(nn.InstanceNorm2d(out_c))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            return layers
+
+        self.net = nn.Sequential(
+            *block(1, c, norm=False),
+            *block(c, c * 2),
+            *block(c * 2, c * 4),
+            *block(c * 4, c * 8, stride=1),
+            nn.Conv2d(c * 8, 1, 4, stride=1, padding=1),
+        )
+
+    def forward(self, x):
+        return self.net(x)
 
 def build_model(stage: str):
     if stage == "stage0_baseline":
