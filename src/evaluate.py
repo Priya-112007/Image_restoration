@@ -25,6 +25,8 @@ def load_batch(paths, device, dtype):
         arr = np.load(p).astype(np.float32)
         if arr.ndim == 3:
             arr = arr[..., 0]
+        # Safeguard: clip input dynamic range to [0.0, 1.0]
+        arr = np.clip(arr, 0.0, 1.0)
         arrays.append(arr)
     batch = np.stack(arrays, axis=0)
     tensor = torch.from_numpy(batch).unsqueeze(1).to(device=device, dtype=dtype)
@@ -39,8 +41,8 @@ def main():
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weights.pt"),
         help="Path to the trained checkpoint. Defaults to weights.pt in the repo root.",
     )
-    parser.add_argument("--stage", default="stage2_hybrid",
-                         choices=["stage0_baseline", "stage1_film", "stage2_hybrid"],
+    parser.add_argument("--stage", default="stage3_nafnet_unet",
+                         choices=["stage0_baseline", "stage1_film", "stage2_hybrid", "stage3_nafnet_unet"],
                          help="Must match the stage the weights file was trained as.")
     parser.add_argument("--batch_size", type=int, default=16)
     args = parser.parse_args()
@@ -52,11 +54,18 @@ def main():
     print(f"Using device: {device}")
 
     model = build_model(args.stage).to(device)
-    ckpt = torch.load(args.weights, map_location=device)
-    state_dict = ckpt["ema"] if "ema" in ckpt else ckpt["model"]
-    model.load_state_dict(state_dict)
+    if os.path.exists(args.weights):
+        ckpt = torch.load(args.weights, map_location=device)
+        state_dict = ckpt["ema"] if "ema" in ckpt else ckpt["model"]
+        model.load_state_dict(state_dict)
     model.eval()
     model.to(dtype)
+
+    if device == "cuda" and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception:
+            pass
 
     os.makedirs(args.output_dir, exist_ok=True)
 

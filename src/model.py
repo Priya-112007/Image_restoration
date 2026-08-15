@@ -40,7 +40,7 @@ class NAFBlock(nn.Module):
         super().__init__()
         self.norm1 = nn.GroupNorm(1, c)
         self.conv1 = nn.Conv2d(c, c * 2, 1)
-        self.dwconv = nn.Conv2d(c * 2, c * 2, 3, padding=1, groups=c * 2)
+        self.dwconv = nn.Conv2d(c * 2, c * 2, 5, padding=2, groups=c * 2)
         self.gate = SimpleGate()
         self.attn = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(c, c, 1))
         self.conv2 = nn.Conv2d(c, c, 1)
@@ -203,6 +203,83 @@ class RestoreNetHybrid(nn.Module):
         out = self.up(feat)
         return torch.clamp(out + skip, 0, 1)
 
+class NAFNetUNet(nn.Module):
+    """Stage 3: Multi-Scale NAFNet UNet Architecture.
+    Features 4-level encoder-decoder hierarchy with downsampling/upsampling
+    to capture broad spatial context for noise removal while retaining sharp edges."""
+    def __init__(self, c=32, scale=2, embed_dim=32, use_film=False):
+        super().__init__()
+        self.scale = scale
+        self.use_film = use_film
+        self.estimator = DegradationEstimator(embed_dim=embed_dim) if use_film else None
+        eff_embed = embed_dim if use_film else None
+        self.head = nn.Conv2d(1, c, 3, padding=1)
+
+        # Encoder Level 1 (c) & Level 2 (2c)
+        self.enc1 = nn.ModuleList([NAFBlock(c, embed_dim=eff_embed) for _ in range(2)])
+        self.down1 = nn.Conv2d(c, c * 2, 2, stride=2)
+
+        self.enc2 = nn.ModuleList([NAFBlock(c * 2, embed_dim=eff_embed) for _ in range(2)])
+        self.down2 = nn.Conv2d(c * 2, c * 4, 2, stride=2)
+
+        # Bottleneck (4c)
+        self.bottleneck = nn.ModuleList([NAFBlock(c * 4, embed_dim=eff_embed) for _ in range(4)])
+
+        # Decoder Level 2
+        self.up2 = nn.Sequential(nn.Conv2d(c * 4, c * 4, 1), nn.PixelShuffle(2))  # c*4 -> c
+        self.fuse2 = nn.Conv2d(c * 2 + c, c * 2, 1)
+        self.dec2 = nn.ModuleList([NAFBlock(c * 2, embed_dim=eff_embed) for _ in range(2)])
+
+        # Decoder Level 1
+        self.up1 = nn.Sequential(nn.Conv2d(c * 2, c * 4, 1), nn.PixelShuffle(2))  # c*2 -> c
+        self.fuse1 = nn.Conv2d(c + c, c, 1)
+        self.dec1 = nn.ModuleList([NAFBlock(c, embed_dim=eff_embed) for _ in range(2)])
+
+        # Final Super-Resolution Upscale Head (smooth projection pre-PixelShuffle to avoid grid artifacts)
+        self.sr_head = nn.Sequential(
+            nn.Conv2d(c, c * scale ** 2, 3, padding=1),
+            nn.PixelShuffle(scale),
+            nn.Conv2d(c, 1, 3, padding=1),
+        )
+
+    def forward(self, x):
+        # Clip input dynamic range to strictly [0, 1]
+        x = torch.clamp(x, 0.0, 1.0)
+        embed = self.estimator(x) if (self.use_film and self.estimator is not None) else None
+        skip_base = F.interpolate(x, scale_factor=self.scale, mode="bicubic", align_corners=False)
+
+        # Encoder Level 1
+        feat1 = self.head(x)
+        for b in self.enc1:
+            feat1 = b(feat1, embed)
+
+        # Downsample to Level 2
+        feat2 = self.down1(feat1)
+        for b in self.enc2:
+            feat2 = b(feat2, embed)
+
+        # Downsample to Bottleneck
+        feat3 = self.down2(feat2)
+        for b in self.bottleneck:
+            feat3 = b(feat3, embed)
+
+        # Upsample & Fuse Level 2
+        up_feat2 = self.up2(feat3)
+        dec_feat2 = self.fuse2(torch.cat([up_feat2, feat2], dim=1))
+        for b in self.dec2:
+            dec_feat2 = b(dec_feat2, embed)
+
+        # Upsample & Fuse Level 1
+        up_feat1 = self.up1(dec_feat2)
+        dec_feat1 = self.fuse1(torch.cat([up_feat1, feat1], dim=1))
+        for b in self.dec1:
+            dec_feat1 = b(dec_feat1, embed)
+
+        # Final Output
+        out = self.sr_head(dec_feat1)
+        return torch.clamp(out + skip_base, 0.0, 1.0)
+
+
 class PatchDiscriminator(nn.Module):
     def __init__(self, c=32):
         super().__init__()
@@ -225,7 +302,14 @@ class PatchDiscriminator(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-def build_model(stage: str):
+
+def count_parameters(model):
+    params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    size_mb = params * 4 / (1024 * 1024)
+    return params, size_mb
+
+
+def build_model(stage: str, use_film: bool = False):
     if stage == "stage0_baseline":
         return RestoreNet(c=48, n_blocks=8, scale=2)
     elif stage == "stage1_film":
@@ -235,8 +319,10 @@ def build_model(stage: str):
             c=48, n_encoder_blocks=4, n_decoder_blocks=4,
             scale=2, embed_dim=32, num_heads=4,
         )
+    elif stage == "stage3_nafnet_unet":
+        return NAFNetUNet(c=32, scale=2, embed_dim=32, use_film=use_film)
     else:
         raise ValueError(
             f"Unknown stage '{stage}'. Expected one of: "
-            f"stage0_baseline, stage1_film, stage2_hybrid"
+            f"stage0_baseline, stage1_film, stage2_hybrid, stage3_nafnet_unet"
         )

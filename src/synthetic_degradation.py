@@ -39,11 +39,12 @@ def generate_synthetic_pair(
     speckle_sigma_range=(0.01, 0.08),
     gaussian_sigma_range=(0.01, 0.05),
 ):
-
-    ops = ["blur", "speckle", "gaussian"]
+    ops = ["blur", "speckle", "gaussian", "downsample"]
     random.shuffle(ops)
 
     img = gt_img.copy()
+    downsampled = False
+
     for op in ops:
         if op == "blur":
             sigma = random.uniform(*blur_sigma_range)
@@ -54,7 +55,11 @@ def generate_synthetic_pair(
         elif op == "gaussian":
             sigma = random.uniform(*gaussian_sigma_range)
             img = apply_gaussian_noise(img, sigma)
+        elif op == "downsample":
+            img = apply_block_downsample(img, factor=downsample_factor)
+            downsampled = True
 
-    img = apply_block_downsample(img, factor=downsample_factor)
+    if not downsampled:
+        img = apply_block_downsample(img, factor=downsample_factor)
 
     return img.astype(np.float32), gt_img.astype(np.float32)

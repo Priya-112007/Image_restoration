@@ -95,6 +95,9 @@ class RestorationDataset(Dataset):
             gt = gt[..., 0]
         if deg.ndim == 3:
             deg = deg[..., 0]
+        # Safeguard: clip input dynamic range to [0.0, 1.0]
+        deg = np.clip(deg, 0.0, 1.0)
+        gt = np.clip(gt, 0.0, 1.0)
         return deg, gt
 
     def _apply_cutmix(self, deg, gt):
@@ -148,10 +151,11 @@ class RestorationDataset(Dataset):
 
             if self.use_gamma_jitter and random.random() < 0.5:
                 gamma = random.uniform(0.85, 1.15)
-                gt = np.power(np.clip(gt, 0, None), gamma).astype(np.float32)
-                deg = np.power(np.clip(deg, 0, None), gamma).astype(np.float32)
+                gt = np.power(np.clip(gt, 0, 1), gamma).astype(np.float32)
+                deg = np.power(np.clip(deg, 0, 1), gamma).astype(np.float32)
 
-            deg = add_extra_speckle(deg)
+        deg = np.clip(deg, 0.0, 1.0)
+        gt = np.clip(gt, 0.0, 1.0)
         deg_t = torch.from_numpy(np.ascontiguousarray(deg)).unsqueeze(0)
         gt_t = torch.from_numpy(np.ascontiguousarray(gt)).unsqueeze(0)
         return deg_t, gt_t

@@ -46,7 +46,6 @@ def psnr(pred, gt, data_range=1.0):
 _SOBEL_X = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
 _SOBEL_Y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
 
-
 def edge_loss(pred, gt):
     kx = _SOBEL_X.view(1, 1, 3, 3).to(device=pred.device, dtype=pred.dtype)
     ky = _SOBEL_Y.view(1, 1, 3, 3).to(device=pred.device, dtype=pred.dtype)
@@ -58,13 +57,37 @@ def edge_loss(pred, gt):
 
     return torch.mean(torch.abs(pred_gx - gt_gx) + torch.abs(pred_gy - gt_gy))
 
+_LAPLACIAN_KERNEL = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=torch.float32)
 
-def frequency_loss(pred, gt):
+def laplacian_edge_loss(pred, gt):
+    lap = _LAPLACIAN_KERNEL.view(1, 1, 3, 3).to(device=pred.device, dtype=pred.dtype)
+    pred_lap = F.conv2d(pred, lap, padding=1)
+    gt_lap = F.conv2d(gt, lap, padding=1)
+    sobel_l = edge_loss(pred, gt)
+    return charbonnier_loss(pred_lap, gt_lap) + 0.5 * sobel_l
+
+
+def ms_ssim(pred, gt, levels=3):
+    total_loss = 0.0
+    curr_p, curr_g = pred, gt
+    for level in range(levels):
+        total_loss += (1.0 - ssim(curr_p, curr_g)) / (2 ** level)
+        if level < levels - 1:
+            curr_p = F.avg_pool2d(curr_p, 2)
+            curr_g = F.avg_pool2d(curr_g, 2)
+    return total_loss
+
+
+def focal_frequency_loss(pred, gt, alpha=1.0):
     pred_fft = torch.fft.rfft2(pred.float(), norm="ortho")
     gt_fft = torch.fft.rfft2(gt.float(), norm="ortho")
-    pred_mag = torch.abs(pred_fft)
-    gt_mag = torch.abs(gt_fft)
-    return torch.mean(torch.abs(pred_mag - gt_mag))
+    matrix = torch.abs(pred_fft - gt_fft)
+    weight = (matrix / (matrix.max() + 1e-8)) ** alpha
+    return torch.mean(weight * matrix)
+
+
+def frequency_loss(pred, gt):
+    return focal_frequency_loss(pred, gt)
 
 def discriminator_loss(disc, real, fake):
     real_pred = disc(real)
@@ -115,12 +138,13 @@ def lpips_loss(pred, gt):
         return model(pred_3ch, gt_3ch).mean()
 
 
-def restoration_loss(pred, gt, w_ssim=0.2, w_edge=0.1, w_lpips=0.15, w_freq=0.0):
+def restoration_loss(pred, gt, w_ssim=0.25, w_edge=0.2, w_lpips=0.1, w_freq=0.1):
     l_charb = charbonnier_loss(pred, gt)
-    l_ssim = 1 - ssim(pred, gt)
-    l_edge = edge_loss(pred, gt)
+    l_ssim = ms_ssim(pred, gt)
+    l_edge = laplacian_edge_loss(pred, gt)
     l_lpips = lpips_loss(pred, gt)
-    l_freq = frequency_loss(pred, gt) if w_freq > 0 else torch.zeros((), device=pred.device)
+    l_freq = focal_frequency_loss(pred, gt) if w_freq > 0 else torch.zeros((), device=pred.device)
+
     total = l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips + w_freq * l_freq
     parts = {
         "charbonnier": l_charb.item(),

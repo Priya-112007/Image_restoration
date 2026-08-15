@@ -1,1 +1,13 @@
+# Python & PyTorch Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Datasets & Virtual Environments
+data/
 venv/
+.env
+
+# Logs & Temporary Task Logs
+*.log

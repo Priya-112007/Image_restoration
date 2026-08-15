@@ -46,7 +46,7 @@ def main():
     parser.add_argument("--deg_dir", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--stage", required=True,
-                         choices=["stage0_baseline", "stage1_film", "stage2_hybrid"])
+                         choices=["stage0_baseline", "stage1_film", "stage2_hybrid", "stage3_nafnet_unet"])
     parser.add_argument("--output_dir", default="./eval_results")
     parser.add_argument("--save_visuals", type=int, default=5,
                          help="Number of side-by-side comparison PNGs to save (0 to disable).")
