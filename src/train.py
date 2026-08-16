@@ -103,11 +103,12 @@ def main():
     )
     val_ds = RestorationDataset(val_pairs, patch_size=args.patch_size, train=False)
 
+    num_workers = 2 if device == "cuda" else 0
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=4, pin_memory=(device == "cuda"), persistent_workers=True, prefetch_factor=2,
+        num_workers=num_workers, pin_memory=(device == "cuda"),
     )
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=0)
 
     model = build_model(args.stage, use_film=args.use_film).to(device)
     ema_model = copy.deepcopy(model)
@@ -159,7 +160,7 @@ def main():
         epoch_start = time.time()
         running_loss = 0.0
 
-        for deg, gt in train_loader:
+        for step, (deg, gt) in enumerate(train_loader):
             deg, gt = deg.to(device), gt.to(device)
 
             with torch.autocast(device_type="cuda" if device == "cuda" else "cpu",
@@ -209,6 +210,9 @@ def main():
                     ema_p.mul_(0.999).add_(p, alpha=0.001)
 
             running_loss += loss.item()
+
+            if (step + 1) % 50 == 0 or (step + 1) == len(train_loader):
+                print(f"  Epoch {epoch:03d} [{step+1:03d}/{len(train_loader):03d}] Loss: {loss.item():.4f}", flush=True)
 
         current_lr = optimizer.param_groups[0]["lr"]
         scheduler.step()
