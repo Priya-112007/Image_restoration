@@ -204,9 +204,8 @@ class RestoreNetHybrid(nn.Module):
         return torch.clamp(out + skip, 0, 1)
 
 class NAFNetUNet(nn.Module):
-    """Stage 3: Multi-Scale NAFNet UNet Architecture.
-    Features 4-level encoder-decoder hierarchy with downsampling/upsampling
-    to capture broad spatial context for noise removal while retaining sharp edges."""
+    """Stage 3: Multi-Scale NAFNet UNet Architecture (v2 with LKA & Deep Supervision).
+    Features 4-level encoder-decoder hierarchy with LKA blocks and auxiliary multi-scale heads."""
     def __init__(self, c=32, scale=2, embed_dim=32, use_film=False):
         super().__init__()
         self.scale = scale
@@ -235,14 +234,21 @@ class NAFNetUNet(nn.Module):
         self.fuse1 = nn.Conv2d(c + c, c, 1)
         self.dec1 = nn.ModuleList([NAFBlock(c, embed_dim=eff_embed) for _ in range(2)])
 
-        # Final Super-Resolution Upscale Head (smooth projection pre-PixelShuffle to avoid grid artifacts)
+        # Final Super-Resolution Upscale Head
         self.sr_head = nn.Sequential(
             nn.Conv2d(c, c * scale ** 2, 3, padding=1),
             nn.PixelShuffle(scale),
             nn.Conv2d(c, 1, 3, padding=1),
         )
 
-    def forward(self, x):
+        # Auxiliary Deep Supervision Projection Head (Level 2 Decoder -> 1x GT Scale Output)
+        self.aux_head2 = nn.Sequential(
+            nn.Conv2d(c * 2, c * scale ** 2, 3, padding=1),
+            nn.PixelShuffle(scale),
+            nn.Conv2d(c, 1, 3, padding=1),
+        )
+
+    def forward(self, x, return_deep_supervision=False):
         # Clip input dynamic range to strictly [0, 1]
         x = torch.clamp(x, 0.0, 1.0)
         embed = self.estimator(x) if (self.use_film and self.estimator is not None) else None
@@ -276,8 +282,13 @@ class NAFNetUNet(nn.Module):
             dec_feat1 = b(dec_feat1, embed)
 
         # Final Output
-        out = self.sr_head(dec_feat1)
-        return torch.clamp(out + skip_base, 0.0, 1.0)
+        out = torch.clamp(self.sr_head(dec_feat1) + skip_base, 0.0, 1.0)
+
+        if return_deep_supervision and self.training:
+            out_half = torch.clamp(self.aux_head2(dec_feat2) + x, 0.0, 1.0)
+            return out, out_half
+
+        return out
 
 
 class PatchDiscriminator(nn.Module):

@@ -5,6 +5,7 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import RestorationDataset, list_paired_files, split_pairs
@@ -60,13 +61,14 @@ def main():
     parser.add_argument("--patience", type=int, default=20,
                          help="Early stopping patience: stop if no val SSIM improvement for N epochs.")
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--patch_size", type=int, default=128)
+    parser.add_argument("--patch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--val_every", type=int, default=1)
     parser.add_argument("--warmup_epochs", type=int, default=5)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--use_film", action="store_true", help="Enable FiLM conditioning in NAFNetUNet.")
+    parser.add_argument("--deep_supervision", action="store_true", default=True, help="Enable multi-scale deep supervision in NAFNetUNet.")
     parser.add_argument("--no_resume", action="store_true")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--use_synthetic_degradation", action="store_true")
@@ -74,7 +76,7 @@ def main():
     parser.add_argument("--use_cutmix", action="store_true")
     parser.add_argument("--cutmix_prob", type=float, default=0.3)
     parser.add_argument("--use_gamma_jitter", action="store_true")
-    parser.add_argument("--w_ssim", type=float, default=0.3)
+    parser.add_argument("--w_ssim", type=float, default=0.4)
     parser.add_argument("--w_edge", type=float, default=0.1)
     parser.add_argument("--w_freq", type=float, default=0.1)
     parser.add_argument("--use_gan", action="store_true")
@@ -140,8 +142,8 @@ def main():
 
     if not args.no_resume and os.path.exists(last_ckpt_path):
         ckpt = torch.load(last_ckpt_path, map_location=device)
-        model.load_state_dict(ckpt["model"])
-        ema_model.load_state_dict(ckpt["ema"])
+        model.load_state_dict(ckpt["model"], strict=False)
+        ema_model.load_state_dict(ckpt["ema"], strict=False)
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"] + 1
@@ -163,7 +165,15 @@ def main():
             with torch.autocast(device_type="cuda" if device == "cuda" else "cpu",
                                  dtype=torch.float16 if device == "cuda" else torch.float32,
                                  enabled=(device == "cuda")):
-                pred = model(deg)
+                if args.deep_supervision and args.stage == "stage3_nafnet_unet":
+                    out_res = model(deg, return_deep_supervision=True)
+                    if isinstance(out_res, tuple):
+                        pred, pred_half = out_res
+                        gt_half = F.interpolate(gt, scale_factor=0.5, mode="bilinear", align_corners=False)
+                    else:
+                        pred, pred_half, gt_half = out_res, None, None
+                else:
+                    pred, pred_half, gt_half = model(deg), None, None
 
             if args.use_gan:
                 disc_optimizer.zero_grad()
@@ -182,6 +192,7 @@ def main():
                                  enabled=(device == "cuda")):
                 loss, loss_parts = restoration_loss(
                     pred, gt, w_ssim=args.w_ssim, w_edge=args.w_edge, w_freq=args.w_freq,
+                    pred_half=pred_half, gt_half=gt_half,
                 )
                 if args.use_gan:
                     adv_loss = generator_adversarial_loss(discriminator, pred)

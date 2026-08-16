@@ -138,14 +138,24 @@ def lpips_loss(pred, gt):
         return model(pred_3ch, gt_3ch).mean()
 
 
-def restoration_loss(pred, gt, w_ssim=0.25, w_edge=0.2, w_lpips=0.1, w_freq=0.1):
+def restoration_loss(pred, gt, w_ssim=0.4, w_edge=0.1, w_lpips=0.1, w_freq=0.1,
+                     pred_half=None, gt_half=None):
     l_charb = charbonnier_loss(pred, gt)
     l_ssim = ms_ssim(pred, gt)
     l_edge = laplacian_edge_loss(pred, gt)
     l_lpips = lpips_loss(pred, gt)
     l_freq = focal_frequency_loss(pred, gt) if w_freq > 0 else torch.zeros((), device=pred.device)
 
-    total = l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips + w_freq * l_freq
+    full_loss = 0.4 * l_charb + w_ssim * l_ssim + w_edge * l_edge + w_lpips * l_lpips + w_freq * l_freq
+
+    if pred_half is not None and gt_half is not None:
+        l_charb_half = charbonnier_loss(pred_half, gt_half)
+        l_ssim_half = ms_ssim(pred_half, gt_half)
+        half_loss = 0.4 * l_charb_half + w_ssim * l_ssim_half
+        total = full_loss + 0.5 * half_loss
+    else:
+        total = full_loss
+
     parts = {
         "charbonnier": l_charb.item(),
         "ssim_loss": l_ssim.item(),
