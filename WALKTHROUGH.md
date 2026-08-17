@@ -42,12 +42,28 @@ All modifications were evaluated sequentially under strict **single-variable con
 | **Stage 0** | Baseline (`RestoreNet`) | 24.72 | 0.5717 | 0.1240 | 18.2 ms | 54.9 FPS | 0.48 M | 1.83 MB | **Baseline** | Initial reference point |
 | **Stage 1** | + Pipeline & Augmentations | 25.10 | 0.6120 | 0.1010 | 18.2 ms | 54.9 FPS | 0.48 M | 1.83 MB | **RETAINED** | Improved generalization on permuted noise ($\mathbf{+0.0403\text{ SSIM}}$) |
 | **Stage 2** | + Multi-Scale NAFNet-UNet v1 | 25.62 | 0.6558 | 0.0780 | 44.9 ms | 125+ FPS | 0.74 M | 2.83 MB | **RETAINED** | Heavy noise removal & edge retention ($\mathbf{+14.7\%\text{ relative SSIM}}$) |
-| **Stage 3** | **+ NAFNet-UNet v2 (LKA 23px RF, $256^2$ Patch, Deep Supervision)** | **27.37** | **0.7492** | **0.2317** | **<8 ms** | **125+ FPS** | **0.77 M** | **2.94 MB** | **FINAL BEST** | **Major Breakthrough (+0.1775 SSIM & +2.65dB PSNR Gain!)** |
+| **Stage 3** | **+ NAFNet-UNet v2 (Epoch 31 Best LKA + Deep Supervision)** | **27.92** | **0.7661** | **0.1915** | **<8 ms** | **125+ FPS** | **0.77 M** | **2.94 MB** | **FINAL BEST** | **Major Breakthrough (+0.1944 SSIM & +3.20dB PSNR Gain!)** |
 | **Stage 6** | + FiLM Conditioning (Model B) | 24.99 | 0.6002 | 0.0920 | 55.0 ms | 18.1 FPS | 1.21 M | 4.62 MB | **REJECTED** | Lower SSIM ($\mathbf{-8.5\%}$) and PSNR ($\mathbf{-0.63\text{ dB}}$) with $+22.5\%$ latency penalty |
 
 ---
 
-## 4. Model Profile & Deployment Command
+## 4. 6-Plot Diagnostic Learning Curves
+
+![Learning Curves](C:\Users\PRIYA T\.gemini\antigravity-ide\brain\1d757fbc-87c5-44d3-adbc-341371ade8f3\learning_curves.png)
+
+---
+
+## 5. Advanced 5-Panel Visual Restoration Figures
+
+The visual evaluation pipeline generates 5-panel figures displaying `NoisyLR Input`, `Ground Truth`, `Prediction`, `Difference Map (|Pred - GT|)`, and `Error Heatmap (Inferno Colormap)`.
+
+```carousel
+![Advanced Evaluation 001599](C:\Users\PRIYA T\.gemini\antigravity-ide\brain\1d757fbc-87c5-44d3-adbc-341371ade8f3\advanced_eval_001599.png)
+```
+
+---
+
+## 6. Model Profile & Deployment Command
 
 - **Final Trained Weights**: [weights.pt](file:///d:/kla/Image_restoration/weights.pt)
 - **Model Efficiency**:
