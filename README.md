@@ -68,7 +68,7 @@ Twatosphere/
 
 ---
 
-## ⚡ Instructions for KLA Evaluators: Execution Guide
+## ⚡ Execution Guide
 
 ### 1. Environment Setup
 Clone the repository and install required packages:
