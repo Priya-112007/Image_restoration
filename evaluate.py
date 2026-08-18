@@ -8,9 +8,15 @@ from collections import defaultdict
 import numpy as np
 import torch
 
-# Dynamically resolve src path
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
-from model import build_model
+# Add src to Python path for seamless importing
+SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+try:
+    from model import build_model
+except ImportError:
+    from src.model import build_model  # type: ignore
 
 def group_files_by_shape(files):
     """Groups file paths by their array shape using mmap for ultra-fast header inspection."""
@@ -92,7 +98,7 @@ def main():
     processed = 0
 
     with torch.no_grad():
-        for shape, group_files in shape_groups.items():
+        for _, group_files in shape_groups.items():
             for i in range(0, len(group_files), args.batch_size):
                 batch_files = group_files[i:i + args.batch_size]
                 batch = load_batch(batch_files, device, dtype)
