@@ -1,7 +1,8 @@
-torch
-numpy
-tqdm
-wandb
-lpips
-matplotlib
-scipy
+# Team Twatosphere - KLA Hackathon 2026 Environment Requirements
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+lpips>=0.1.4
+matplotlib>=3.7.0
+scipy>=1.10.0
+tqdm>=4.65.0
