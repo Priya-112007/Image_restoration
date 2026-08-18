@@ -11,7 +11,7 @@
 ## 📌 Team Details
 - **Team Name**: **Twatosphere**
 - **Problem Statement**: **AI-Based Restoration of Degraded Images** (SEMICON Hackathon 2026)
-
+- **video Link**:https://youtu.be/_yWejg5UCDw?si=tA8H1wpRRQdBz3pC
 ---
 
 ## 📌 Project Overview & Solution Architecture
